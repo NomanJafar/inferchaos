@@ -14,7 +14,7 @@ Reliability is proven under failure, not in demos.
 
 ## Status
 
-Scaffolded. Concept notes and the first implementation are in progress; results land in `results/` once the GPU runs are done.
+Concept primer written (`CONCEPTS.md`). The fault injectors, burn-rate calculator and reports are next; one T4 run kills a real vLLM replica.
 
 ## Layout
 
