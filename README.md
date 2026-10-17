@@ -14,7 +14,7 @@ Reliability is proven under failure, not in demos.
 
 ## Status
 
-Mock-provider suite done (results below); the T4 run that kills a real vLLM replica mid-load is in flight and will be added.
+Done. Mock-provider suite and one live run on a T4 (a real vLLM replica killed and restarted mid-load) are written up below.
 
 ## What is in here
 
@@ -55,6 +55,26 @@ Two providers in the chain (`p0`, `p1`), 16 concurrent requests each, 40 ms TTFT
 4. **Rate limiting turned the spike into 2,324 rejections and zero budget burn.** The admitted requests never left the 100 ms band. Whether a 429 is better than a slow answer is a product decision, but it is the decision that keeps the SLO, and the experiment shows the two outcomes do not mix: budget is burned by admitted-and-slow, not by rejected.
 5. **The alerts fired fast because the burn was extreme** (ticket at 1 s, page at 4 s after the throttle began, against 30–60 s long windows): a 67x burn fills a long window's threshold in a fraction of the window. At a realistic 2–5x burn the long window would take minutes to fire, which is the point of the multi-window design.
 6. **One gateway bug was found and fixed by this experiment:** the user-facing TTFT header reported the successful attempt's TTFT (40 ms on the fallback), hiding the 1.6 s the user actually waited on the throttled provider; the first throttle run therefore burned no budget at all. The header is now end-to-end and the per-attempt figure is separate. That is the kind of thing chaos testing is for.
+
+## Results: killing a real vLLM replica on a T4 (run 4, 18 Oct 2026)
+
+Same gateway and rules, with `p0` replaced by a real vLLM 0.31 instance (Qwen2.5-1.5B-Instruct fp16 on a Kaggle T4; first cold start 161 s) and `p1` the mock. 4 req/s, 32-token answers, SLO: success and TTFT ≤ 800 ms at 99%. 60 s baseline, `p0` killed at 60 s (SIGKILL of the whole process group), restarted as soon as the GPU memory was free, then 240 s of recovery. Raw timeline in [results/kaggle_run4/kill_real_vllm.json](results/kaggle_run4/kill_real_vllm.json).
+
+| requests | user errors | fallbacks | retries | breaker opened after the kill | GPU memory released | restart to `/health` | traffic back on vLLM | budget consumed | peak burn | alerts |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1,827 | **0** | 65 | 50 | 5.1 s | 0.58 s | 95.9 s | 171 s after the kill | **219 %** | 100x | page + ticket, twice |
+
+![real kill](results/kaggle_run4/faults.png)
+
+Reading the picture left to right: the real T4 answers at ~510 ms TTFT (the plateau), the mock at ~110 ms. At 60 s the kill empties the plateau; the gateway retries, falls back, and opens the breaker 5.1 s later; the breaker probes every 10 s and each probe fails until the restart; at 171 s the first probe after the restart succeeds and traffic returns to vLLM. Two things in the picture are not the kill: the burst of 3.5 s TTFTs at the very start, and the second burst at 220–230 s.
+
+### What the numbers say
+
+1. **The kill itself burned nothing.** During the 60 s fault window there were 243 requests and **0** bad events: every connection to the dead replica failed in milliseconds, the retry went to `p1`, and users got *faster* answers (110 ms from the mock against 510 ms from the T4). This is the mock experiment's result reproduced with a real process: a dead dependency is the easy case.
+2. **The restart worked because the whole process group died.** Run 3 killed only the API server; its EngineCore child kept 12.9 GiB and the replacement found 1.6 GiB free. With `VllmServer.kill()` signalling the group, the GPU memory was released in 0.58 s and the new instance was healthy 95.9 s later (weights already on disk; the first start took 161 s). That delay is the recovery cost of a replica kill, and nothing in the gateway can shorten it: only a warm standby ([gpuscaler](https://github.com/NomanJafar/gpuscaler)) does.
+3. **The budget was burned by the cold replica, twice, not by the dead one.** Every bad event in the run (15 in the first 10 s, 23 between 220 and 230 s) is a 3.5 s TTFT from a vLLM instance that had just started serving. vLLM's own log names the cause at exactly those moments: `Triton kernel JIT compilation during inference: kernel_unified_attention` and three top-p sampling kernels, "this causes a latency spike; consider extending warmup". The first time it hit the baseline (the notebook sent no warm-up traffic, a defect of this run, and the reason the alerts fire at t = 1 s); the second time it hit 60 s after the restarted replica took traffic, when a request shape it had not yet compiled for arrived. Both times the TTFT breaker opened within 4–11 s and the page and ticket alerts fired, because at 4 req/s a few 3.5 s answers are a 100x burn against a 1 % budget.
+4. **"Ready" is not "warm".** `/health` returned 200 at 156.6 s; the first user request after that would still have taken seconds. A chain that admits a replica on readiness alone pays the JIT in user latency; the fix is a warm-up pass (a handful of requests across the prompt and batch shapes the service uses) between readiness and admission, which is what vLLM's warning asks for and what the breaker here did crudely by probing. Run 4 turned a planned experiment about failure into a measurement of the cost of recovery, which is the better result.
+5. **Recovery time was 3.1 s each time** (the metric's floor: three seconds of sustained good events), because the fallback provider was healthy throughout. The user-visible recovery from the kill was instant; the system's recovery was 171 s.
 
 ## Layout
 
