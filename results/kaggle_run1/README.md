@@ -1,0 +1,1 @@
+Run 1 (2026-10-17): the kernel started before Kaggle had finished processing the attached dataset, so `/kaggle/input/inferchaos-src/*.whl` was empty and the import failed. kaggle_run.sh now waits for the dataset to report ready.
