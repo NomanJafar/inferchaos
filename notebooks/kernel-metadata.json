@@ -1,0 +1,16 @@
+{
+  "id": "muhammadnomanjafar/inferchaos-kill-a-real-vllm-replica-on-a-t4",
+  "title": "inferchaos: kill a real vLLM replica on a T4",
+  "code_file": "kaggle_inferchaos.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
